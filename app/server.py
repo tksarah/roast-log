@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import cgi
 import datetime as dt
-import hashlib
-import hmac
 import json
 import mimetypes
 import os
@@ -14,9 +12,10 @@ import sqlite3
 import tempfile
 import urllib.parse
 import zipfile
+from contextlib import contextmanager
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,8 +26,8 @@ UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", ROOT / "uploads"))
 RECORD_UPLOAD_DIR = UPLOAD_DIR / "records"
 ROASTER_UPLOAD_DIR = UPLOAD_DIR / "roasters"
 APP_PORT = int(os.environ.get("APP_PORT", "3000"))
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "roastlog")
-SESSIONS: set[str] = set()
+PUBLIC_PAGE = STATIC_DIR / "index.html"
+ADMIN_PAGE = STATIC_DIR / "admin.html"
 
 
 DEFAULT_NAMES = [
@@ -105,31 +104,26 @@ RECORD_FIELDS = [
     "drop_temp_c",
     "temperature_band",
     "taste_rating",
+    "is_public",
+    "public_summary",
     "comment",
 ]
 
 
-def connect() -> sqlite3.Connection:
+@contextmanager
+def connect():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
-    return con
-
-
-def hash_password(password: str, salt: str | None = None) -> str:
-    salt = salt or secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 120_000)
-    return f"pbkdf2_sha256${salt}${digest.hex()}"
-
-
-def verify_password(password: str, stored: str) -> bool:
     try:
-        _, salt, expected = stored.split("$", 2)
-    except ValueError:
-        return False
-    actual = hash_password(password, salt).split("$", 2)[2]
-    return hmac.compare_digest(actual, expected)
+        yield con
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def now_iso() -> str:
@@ -142,11 +136,6 @@ def init_db() -> None:
     with connect() as con:
         con.executescript(
             """
-            CREATE TABLE IF NOT EXISTS app_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS roasters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -213,6 +202,8 @@ def init_db() -> None:
                 drop_temp_c REAL,
                 temperature_band TEXT DEFAULT '',
                 taste_rating INTEGER,
+                is_public INTEGER NOT NULL DEFAULT 0,
+                public_summary TEXT DEFAULT '',
                 comment TEXT DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -238,16 +229,19 @@ def init_db() -> None:
             );
             """
         )
+        migrate_schema(con)
         seed(con)
 
 
-def seed(con: sqlite3.Connection) -> None:
-    if not con.execute("SELECT value FROM app_settings WHERE key='admin_password_hash'").fetchone():
-        con.execute(
-            "INSERT INTO app_settings(key, value) VALUES('admin_password_hash', ?)",
-            (hash_password(ADMIN_PASSWORD),),
-        )
+def migrate_schema(con: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in con.execute("PRAGMA table_info(roast_records)")}
+    if "is_public" not in columns:
+        con.execute("ALTER TABLE roast_records ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0")
+    if "public_summary" not in columns:
+        con.execute("ALTER TABLE roast_records ADD COLUMN public_summary TEXT DEFAULT ''")
 
+
+def seed(con: sqlite3.Connection) -> None:
     groups = [
         ("bean_name", "名称"),
         ("processing", "精選処理"),
@@ -376,6 +370,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/bootstrap":
                 self.json(self.bootstrap())
+            elif path == "/api/public/journal":
+                self.json(self.public_journal())
             elif path == "/api/records":
                 self.json(self.list_records(query))
             elif re.match(r"^/api/records/\d+$", path):
@@ -388,8 +384,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.serve_file(ROOT / path.lstrip("/"))
             elif path.startswith("/static/"):
                 self.serve_file(ROOT / path.lstrip("/"))
+            elif path == "/admin" or path == "/admin/":
+                self.serve_file(ADMIN_PAGE)
+            elif path.startswith("/admin/"):
+                self.serve_file(ADMIN_PAGE)
             else:
-                self.serve_file(STATIC_DIR / "index.html")
+                self.serve_file(PUBLIC_PAGE)
         except Exception as exc:
             self.error(exc)
 
@@ -397,31 +397,21 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         try:
-            if path == "/api/admin/login":
-                self.admin_login()
-            elif path == "/api/admin/password":
-                self.require_admin()
-                self.change_password()
-            elif path == "/api/records":
+            if path == "/api/records":
                 self.json(self.save_record(parse_json(self)), HTTPStatus.CREATED)
             elif re.match(r"^/api/records/\d+/duplicate$", path):
                 self.json(self.duplicate_record(int(path.split("/")[-2])), HTTPStatus.CREATED)
             elif re.match(r"^/api/records/\d+/photos$", path):
                 self.upload_record_photo(int(path.split("/")[-2]))
             elif path == "/api/roasters":
-                self.require_admin()
                 self.json(self.save_roaster(parse_json(self)), HTTPStatus.CREATED)
             elif re.match(r"^/api/roasters/\d+/photo$", path):
-                self.require_admin()
                 self.upload_roaster_photo(int(path.split("/")[-2]))
             elif path == "/api/options":
-                self.require_admin()
                 self.json(self.save_option(parse_json(self)), HTTPStatus.CREATED)
             elif path == "/api/flavor-axes":
-                self.require_admin()
                 self.json(self.save_flavor_axis(parse_json(self)), HTTPStatus.CREATED)
             elif path == "/api/backup/import":
-                self.require_admin()
                 self.import_backup()
             else:
                 self.not_found()
@@ -435,13 +425,10 @@ class Handler(BaseHTTPRequestHandler):
             if re.match(r"^/api/records/\d+$", path):
                 self.json(self.save_record(parse_json(self), int(path.rsplit("/", 1)[1])))
             elif re.match(r"^/api/roasters/\d+$", path):
-                self.require_admin()
                 self.json(self.save_roaster(parse_json(self), int(path.rsplit("/", 1)[1])))
             elif re.match(r"^/api/options/\d+$", path):
-                self.require_admin()
                 self.json(self.save_option(parse_json(self), int(path.rsplit("/", 1)[1])))
             elif re.match(r"^/api/flavor-axes/\d+$", path):
-                self.require_admin()
                 self.json(self.save_flavor_axis(parse_json(self), int(path.rsplit("/", 1)[1])))
             else:
                 self.not_found()
@@ -457,13 +444,10 @@ class Handler(BaseHTTPRequestHandler):
             elif re.match(r"^/api/photos/\d+$", path):
                 self.delete_photo(int(path.rsplit("/", 1)[1]))
             elif re.match(r"^/api/roasters/\d+$", path):
-                self.require_admin()
                 self.soft_delete("roasters", int(path.rsplit("/", 1)[1]))
             elif re.match(r"^/api/options/\d+$", path):
-                self.require_admin()
                 self.soft_delete("option_items", int(path.rsplit("/", 1)[1]))
             elif re.match(r"^/api/flavor-axes/\d+$", path):
-                self.require_admin()
                 self.soft_delete("flavor_axes", int(path.rsplit("/", 1)[1]))
             else:
                 self.not_found()
@@ -536,6 +520,97 @@ class Handler(BaseHTTPRequestHandler):
                 row["photos"] = [public_path(p["file_path"]) for p in con.execute("SELECT file_path FROM roast_photos WHERE record_id=? ORDER BY sort_order, id", (row["id"],))]
             return {"records": rows}
 
+    def public_journal(self) -> dict:
+        with connect() as con:
+            rows = [
+                dict(row)
+                for row in con.execute(
+                    """
+                    SELECT r.*, ro.name roaster_name
+                    FROM roast_records r
+                    LEFT JOIN roasters ro ON ro.id = r.roaster_id
+                    WHERE r.is_public = 1
+                    ORDER BY r.date DESC, r.id DESC
+                    LIMIT 9
+                    """
+                )
+            ]
+            journal = [self.decorate_public_record(con, calc_record(row)) for row in rows]
+            return {
+                "journal": journal,
+                "stats": self.public_stats(con),
+            }
+
+    def public_stats(self, con: sqlite3.Connection) -> dict:
+        public_rows = [calc_record(dict(row)) for row in con.execute("SELECT * FROM roast_records WHERE is_public = 1 ORDER BY date DESC, id DESC")]
+        countries = len({row["country"] for row in public_rows if row.get("country")})
+        avg_rating_values = [row["taste_rating"] for row in public_rows if row.get("taste_rating") is not None]
+        avg_rating = round(sum(avg_rating_values) / len(avg_rating_values), 1) if avg_rating_values else None
+        recent = public_rows[0] if public_rows else None
+        axes = con.execute("SELECT * FROM flavor_axes WHERE is_active=1 ORDER BY sort_order, id").fetchall()
+        flavor_average = []
+        for axis in axes:
+            avg = con.execute(
+                """
+                SELECT AVG(fs.score) value
+                FROM flavor_scores fs
+                INNER JOIN roast_records rr ON rr.id = fs.record_id
+                WHERE fs.axis_id = ? AND rr.is_public = 1
+                """,
+                (axis["id"],),
+            ).fetchone()["value"]
+            flavor_average.append({"label": axis["label"], "score": round(avg, 1) if avg else None})
+        return {
+            "count": len(public_rows),
+            "countries": countries,
+            "avg_rating": avg_rating,
+            "recent_date": recent["date"] if recent else None,
+            "flavor_average": flavor_average,
+        }
+
+    def decorate_public_record(self, con: sqlite3.Connection, record: dict) -> dict:
+        photos = [dict(row) for row in con.execute("SELECT * FROM roast_photos WHERE record_id=? ORDER BY sort_order, id", (record["id"],))]
+        lead_photo = public_path(photos[0]["file_path"]) if photos else None
+        scores = []
+        for row in con.execute(
+            """
+            SELECT fa.label, fs.score
+            FROM flavor_scores fs
+            INNER JOIN flavor_axes fa ON fa.id = fs.axis_id
+            WHERE fs.record_id = ? AND fa.is_active = 1
+            ORDER BY fa.sort_order, fa.id
+            """,
+            (record["id"],),
+        ):
+            scores.append({"label": row["label"], "score": row["score"]})
+        return {
+            "id": record["id"],
+            "name": record["name"],
+            "date": record["date"],
+            "country": record.get("country") or "",
+            "region": record.get("region") or "",
+            "farm": record.get("farm") or "",
+            "processing": record.get("processing") or "",
+            "roast_level": record.get("roast_level") or "",
+            "taste_rating": record.get("taste_rating"),
+            "loss_rate": record.get("loss_rate"),
+            "roaster_name": record.get("roaster_name") or "",
+            "public_summary": self.public_summary_text(record),
+            "lead_photo_url": lead_photo,
+            "flavor_scores": scores,
+        }
+
+    def public_summary_text(self, record: dict) -> str:
+        summary = (record.get("public_summary") or "").strip()
+        if summary:
+            return summary
+        parts = [part for part in [record.get("country"), record.get("region"), record.get("processing")] if part]
+        lead = " / ".join(parts[:3])
+        roast = record.get("roast_level") or "焙煎"
+        if lead:
+            return f"{lead} の豆を {roast} で記録した一杯。"
+        return f"{roast} で整えた焙煎ログ。"
+
     def get_record(self, record_id: int) -> dict:
         with connect() as con:
             row = con.execute("SELECT r.*, ro.name roaster_name, ro.thumbnail_path roaster_thumbnail_path FROM roast_records r LEFT JOIN roasters ro ON ro.id=r.roaster_id WHERE r.id=?", (record_id,)).fetchone()
@@ -560,10 +635,12 @@ class Handler(BaseHTTPRequestHandler):
         values = {field: payload.get(field) for field in RECORD_FIELDS}
         values["date"] = values["date"] or dt.date.today().isoformat()
         values["name"] = (values["name"] or "").strip()
+        values["public_summary"] = (values.get("public_summary") or "").strip()
         for key in ["defect_count", "green_weight_g", "roasted_weight_g", "l_value", "charge_temp_c", "first_crack_start_temp_c", "first_crack_end_temp_c", "second_crack_start_temp_c", "drop_temp_c"]:
             values[key] = to_number(values.get(key))
         values["roaster_id"] = int(values["roaster_id"]) if values.get("roaster_id") else None
         values["taste_rating"] = int(values["taste_rating"]) if values.get("taste_rating") else None
+        values["is_public"] = int(bool(payload.get("is_public")))
         with connect() as con:
             if payload.get("add_name_option") and values["name"]:
                 add_option(con, "bean_name", values["name"], values["name"], "", "", None, None, "", 999)
@@ -605,6 +682,8 @@ class Handler(BaseHTTPRequestHandler):
                 data.pop(key, None)
             data["date"] = dt.date.today().isoformat()
             data["taste_rating"] = None
+            data["is_public"] = 0
+            data["public_summary"] = ""
             data["comment"] = ""
             fields = list(data.keys())
             cur = con.execute(
@@ -717,43 +796,14 @@ class Handler(BaseHTTPRequestHandler):
             con.execute(f"UPDATE {table} SET is_active=0 WHERE id=?", (item_id,))
         self.json({"ok": True})
 
-    def admin_login(self) -> None:
-        payload = parse_json(self)
-        password = payload.get("password", "")
-        with connect() as con:
-            stored = con.execute("SELECT value FROM app_settings WHERE key='admin_password_hash'").fetchone()["value"]
-        if not verify_password(password, stored):
-            raise HttpError(HTTPStatus.UNAUTHORIZED, "Invalid password")
-        token = secrets.token_urlsafe(32)
-        SESSIONS.add(token)
-        self.json({"token": token})
-
-    def change_password(self) -> None:
-        payload = parse_json(self)
-        password = payload.get("password", "")
-        if len(password) < 6:
-            raise HttpError(HTTPStatus.BAD_REQUEST, "6文字以上で入力してください")
-        with connect() as con:
-            con.execute("UPDATE app_settings SET value=? WHERE key='admin_password_hash'", (hash_password(password),))
-        self.json({"ok": True})
-
-    def require_admin(self) -> None:
-        token = self.headers.get("X-Admin-Token", "")
-        if token not in SESSIONS:
-            raise HttpError(HTTPStatus.UNAUTHORIZED, "Admin password required")
-
     def export_backup(self) -> None:
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M")
         with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
             tmp_path = Path(tmp.name)
         try:
             with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                if DB_PATH.exists():
-                    zf.write(DB_PATH, "database.sqlite")
-                if UPLOAD_DIR.exists():
-                    for path in UPLOAD_DIR.rglob("*"):
-                        if path.is_file():
-                            zf.write(path, f"uploads/{path.relative_to(UPLOAD_DIR)}")
+                write_database_backup(zf)
+                write_uploads_backup(zf)
                 manifest = {"app": "roast-log", "created_at": now_iso(), "version": 1}
                 zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
             self.send_response(HTTPStatus.OK)
@@ -777,17 +827,13 @@ class Handler(BaseHTTPRequestHandler):
                 shutil.copyfileobj(item.file, f)
             extract_dir = Path(tmpdir) / "extract"
             with zipfile.ZipFile(zip_path) as zf:
-                zf.extractall(extract_dir)
+                validate_backup_manifest(zf)
+                extract_backup_zip(zf, extract_dir)
             database = extract_dir / "database.sqlite"
             if not database.exists():
                 raise HttpError(HTTPStatus.BAD_REQUEST, "database.sqlite not found")
-            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(database, DB_PATH)
-            uploads = extract_dir / "uploads"
-            if uploads.exists():
-                if UPLOAD_DIR.exists():
-                    shutil.rmtree(UPLOAD_DIR)
-                shutil.copytree(uploads, UPLOAD_DIR)
+            validate_backup_database(database)
+            restore_backup_contents(database, extract_dir / "uploads")
         init_db()
         self.json({"ok": True})
 
@@ -799,6 +845,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(path.stat().st_size))
+        if is_relative_to(path, UPLOAD_DIR):
+            self.send_header("Cache-Control", "no-store")
         self.end_headers()
         with path.open("rb") as f:
             shutil.copyfileobj(f, self.wfile)
@@ -839,6 +887,173 @@ def safe_unlink(path: Path) -> None:
         path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def remove_path(path: Path) -> None:
+    if not path.exists() and not path.is_symlink():
+        return
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        safe_unlink(path)
+
+
+def unique_sibling(path: Path, suffix: str) -> Path:
+    while True:
+        candidate = path.parent / f".{path.name}.{secrets.token_hex(8)}.{suffix}"
+        if not candidate.exists():
+            return candidate
+
+
+def write_database_backup(zf: zipfile.ZipFile) -> None:
+    if not DB_PATH.exists():
+        return
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite") as tmp:
+        snapshot = Path(tmp.name)
+    source = None
+    dest = None
+    try:
+        source = sqlite3.connect(DB_PATH)
+        dest = sqlite3.connect(snapshot)
+        source.backup(dest)
+        zf.write(snapshot, "database.sqlite")
+    finally:
+        if dest is not None:
+            dest.close()
+        if source is not None:
+            source.close()
+        safe_unlink(snapshot)
+
+
+def write_uploads_backup(zf: zipfile.ZipFile) -> None:
+    if not UPLOAD_DIR.exists():
+        return
+    if not UPLOAD_DIR.is_dir():
+        raise HttpError(HTTPStatus.INTERNAL_SERVER_ERROR, "upload path is not a directory")
+    zf.writestr("uploads/", "")
+    for path in UPLOAD_DIR.rglob("*"):
+        rel = path.relative_to(UPLOAD_DIR).as_posix()
+        arcname = f"uploads/{rel}"
+        if path.is_dir():
+            zf.writestr(f"{arcname.rstrip('/')}/", "")
+        elif path.is_file():
+            zf.write(path, arcname)
+
+
+def validate_backup_manifest(zf: zipfile.ZipFile) -> None:
+    if "manifest.json" not in zf.namelist():
+        return
+    try:
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HttpError(HTTPStatus.BAD_REQUEST, "invalid manifest.json") from exc
+    app_name = manifest.get("app")
+    if app_name and app_name != "roast-log":
+        raise HttpError(HTTPStatus.BAD_REQUEST, "backup is not for roast-log")
+
+
+def backup_member_path(root: Path, member_name: str) -> Path:
+    normalized = member_name.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    parts = path.parts
+    if not parts or path.is_absolute() or any(part in ("", ".", "..") for part in parts):
+        raise HttpError(HTTPStatus.BAD_REQUEST, f"invalid backup path: {member_name}")
+    if any(":" in part for part in parts):
+        raise HttpError(HTTPStatus.BAD_REQUEST, f"invalid backup path: {member_name}")
+    return root.joinpath(*parts)
+
+
+def extract_backup_zip(zf: zipfile.ZipFile, extract_dir: Path) -> None:
+    for member in zf.infolist():
+        target = backup_member_path(extract_dir, member.filename)
+        if member.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with zf.open(member) as source, target.open("wb") as dest:
+            shutil.copyfileobj(source, dest)
+
+
+def validate_backup_database(database: Path) -> None:
+    required_tables = {
+        "roasters",
+        "option_groups",
+        "option_items",
+        "flavor_axes",
+        "roast_records",
+        "roast_photos",
+        "flavor_scores",
+    }
+    con = None
+    try:
+        con = sqlite3.connect(database)
+        rows = con.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    except sqlite3.DatabaseError as exc:
+        raise HttpError(HTTPStatus.BAD_REQUEST, "invalid database.sqlite") from exc
+    finally:
+        if con is not None:
+            con.close()
+    tables = {row[0] for row in rows}
+    missing = sorted(required_tables - tables)
+    if missing:
+        raise HttpError(HTTPStatus.BAD_REQUEST, f"backup database is missing: {', '.join(missing)}")
+
+
+def stage_uploads(source: Path, staging: Path) -> None:
+    if source.exists():
+        if not source.is_dir():
+            raise HttpError(HTTPStatus.BAD_REQUEST, "uploads in backup is not a directory")
+        shutil.copytree(source, staging)
+    else:
+        staging.mkdir(parents=True)
+
+
+def restore_database_from_backup(database: Path) -> None:
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    source = None
+    dest = None
+    try:
+        source = sqlite3.connect(database)
+        dest = sqlite3.connect(DB_PATH, timeout=30)
+        source.backup(dest)
+    except sqlite3.DatabaseError as exc:
+        raise HttpError(HTTPStatus.INTERNAL_SERVER_ERROR, "could not restore database") from exc
+    finally:
+        if dest is not None:
+            dest.close()
+        if source is not None:
+            source.close()
+
+
+def restore_backup_contents(database: Path, uploads: Path) -> None:
+    UPLOAD_DIR.parent.mkdir(parents=True, exist_ok=True)
+
+    upload_staging = unique_sibling(UPLOAD_DIR, "restore")
+    upload_backup = unique_sibling(UPLOAD_DIR, "old")
+
+    try:
+        stage_uploads(uploads, upload_staging)
+
+        if UPLOAD_DIR.exists() or UPLOAD_DIR.is_symlink():
+            UPLOAD_DIR.rename(upload_backup)
+        upload_staging.rename(UPLOAD_DIR)
+        restore_database_from_backup(database)
+    except Exception:
+        remove_path(UPLOAD_DIR)
+        if upload_backup.exists() or upload_backup.is_symlink():
+            upload_backup.rename(UPLOAD_DIR)
+        raise
+    finally:
+        remove_path(upload_staging)
+        remove_path(upload_backup)
+
+
+def is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def main() -> None:

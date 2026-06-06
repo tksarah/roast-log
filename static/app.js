@@ -2,8 +2,8 @@ const state = {
   bootstrap: null,
   records: [],
   selectedRecord: null,
-  adminToken: localStorage.getItem("adminToken") || "",
   selectedPhotoFiles: [],
+  mediaVersion: Date.now(),
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -23,7 +23,6 @@ const roastPositions = {
 async function api(path, options = {}) {
   const headers = options.headers || {};
   if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
-  if (state.adminToken) headers["X-Admin-Token"] = state.adminToken;
   const res = await fetch(path, { ...options, headers });
   if (!res.ok) {
     const data = await res.json().catch(() => ({ error: res.statusText }));
@@ -53,7 +52,7 @@ function switchView(view) {
     settings: "Settings",
     backup: "Backup",
   }[view];
-  $("#page-kicker").textContent = view === "settings" ? "Admin password required" : "";
+  $("#page-kicker").textContent = "";
 }
 
 async function loadBootstrap() {
@@ -136,12 +135,13 @@ function renderRecords() {
 function recordRow(record) {
   const roastThumb = roastThumbHtml(record.roast_level);
   const photo = record.photos?.[0] || record.roaster_thumbnail_url;
-  const thumb = photo ? `<img class="thumb" src="${photo}" alt="">` : roastThumb;
+  const thumb = photo ? `<img class="thumb" src="${mediaUrl(photo)}" alt="">` : roastThumb;
+  const visibility = record.is_public ? `<span class="chip chip-accent">Public</span>` : "";
   return `
     <article class="record-row" data-id="${record.id}">
       ${thumb}
       <div>
-        <div class="row-title">${escapeHtml(displayName(record))} <span class="chip">${record.date}</span></div>
+        <div class="row-title">${escapeHtml(displayName(record))} <span class="chip">${record.date}</span>${visibility}</div>
         <div class="row-meta">
           <span>${escapeHtml(record.roaster_name || "-")}</span>
           <span>${escapeHtml(record.roast_level || "-")}</span>
@@ -171,6 +171,7 @@ function renderDetail(record) {
       <span class="chip">${escapeHtml(record.temperature_band || "-")}</span>
       <span class="chip">${record.loss_rate == null ? "-" : record.loss_rate + "% loss"}</span>
       <span class="chip">${record.taste_rating || "-"} rating</span>
+      <span class="chip ${record.is_public ? "chip-accent" : ""}">${record.is_public ? "Public" : "Private"}</span>
     </div>
     <div class="detail-grid">
       ${detailItem("焙煎前", grams(record.green_weight_g))}
@@ -183,7 +184,8 @@ function renderDetail(record) {
       ${detailItem("2ハゼ開始", temp(record.second_crack_start_temp_c))}
     </div>
     <canvas id="detail-radar" width="320" height="240"></canvas>
-    <div class="photo-strip">${(record.photos || []).map((p) => `<img src="${p.url}" alt="">`).join("")}</div>
+    <div class="photo-strip">${(record.photos || []).map((p) => `<img src="${mediaUrl(p.url)}" alt="">`).join("")}</div>
+    <p class="public-summary">${escapeHtml(record.public_summary || "")}</p>
     <p>${escapeHtml(record.comment || "")}</p>
     <div class="form-actions">
       <button id="show-roast-ref">Roast ref</button>
@@ -259,6 +261,7 @@ async function saveRecord(event) {
   const id = data.id;
   delete data.id;
   data.add_name_option = Boolean(data.add_name_option);
+  data.is_public = form.elements.is_public.checked;
   data.flavor_scores = {};
   $$("#flavor-inputs input").forEach((input) => (data.flavor_scores[input.dataset.axis] = Number(input.value)));
   const saved = await api(id ? `/api/records/${id}` : "/api/records", {
@@ -283,8 +286,10 @@ function editRecord(record) {
   form.reset();
   Object.entries(record).forEach(([key, value]) => {
     const input = form.elements[key];
-    if (input && value != null && typeof value !== "object") input.value = value;
+    if (input && input.type !== "checkbox" && value != null && typeof value !== "object") input.value = value;
   });
+  form.elements.is_public.checked = Boolean(record.is_public);
+  form.elements.add_name_option.checked = false;
   renderRoastLevelPicker(record.roast_level || "");
   renderFlavorInputs(record.flavor_scores || {});
 }
@@ -313,6 +318,7 @@ function clearForm() {
   $("#record-form").reset();
   $("#record-form [name=id]").value = "";
   $("#record-form [name=date]").value = state.bootstrap.today;
+  $("#record-form [name=is_public]").checked = false;
   state.selectedPhotoFiles = [];
   $("#record-photos").value = "";
   renderPhotoPreview();
@@ -321,8 +327,6 @@ function clearForm() {
 }
 
 function renderSettings() {
-  $("#admin-content").classList.toggle("hidden", !state.adminToken);
-  $("#admin-lock").classList.toggle("hidden", Boolean(state.adminToken));
   renderRoasterAdmin();
   renderOptionAdmin();
   renderAxisAdmin();
@@ -333,7 +337,7 @@ function renderRoasterAdmin() {
     .map(
       (r) => `
       <div class="admin-item">
-        <div>${r.thumbnail_url ? `<img class="thumb" src="${r.thumbnail_url}" alt="">` : `<span class="thumb"></span>`}<strong>${escapeHtml(r.name)}</strong><span class="chip">${r.is_active ? "active" : "off"}</span></div>
+        <div>${r.thumbnail_url ? `<img class="thumb" src="${mediaUrl(r.thumbnail_url)}" alt="">` : `<span class="thumb"></span>`}<strong>${escapeHtml(r.name)}</strong><span class="chip">${r.is_active ? "active" : "off"}</span></div>
         <button data-roaster-edit="${r.id}">Edit</button>
       </div>`
     )
@@ -352,17 +356,38 @@ function renderRoasterAdmin() {
 }
 
 function renderOptionAdmin() {
-  const labels = { bean_name: "名称", processing: "精選", roast_level: "焙煎度", taste_rating: "評価", temperature_band: "温度帯" };
-  $("#option-admin-list").innerHTML = Object.entries(state.bootstrap.options)
-    .flatMap(([group, items]) =>
-      items.map(
-        (item) => `
-        <div class="admin-item">
-          <div>${group === "roast_level" ? roastThumbHtml(item.value) : ""}<strong>${escapeHtml(item.label)}</strong><span class="chip">${labels[group] || group}</span><span class="chip">${item.is_active ? "active" : "off"}</span></div>
-          <button data-option-edit="${item.id}">Edit</button>
-        </div>`
-      )
-    )
+  const labels = Object.fromEntries([...$("#option-form [name=group_key]").options].map((option) => [option.value, option.textContent]));
+  const orderedGroups = ["bean_name", "processing", "roast_level", "taste_rating", "temperature_band"];
+  const groups = [
+    ...orderedGroups.filter((group) => state.bootstrap.options[group]),
+    ...Object.keys(state.bootstrap.options).filter((group) => !orderedGroups.includes(group)),
+  ];
+  $("#option-admin-list").innerHTML = groups
+    .map((group) => {
+      const items = state.bootstrap.options[group] || [];
+      const activeCount = items.filter((item) => item.is_active).length;
+      return `
+        <details class="option-group">
+          <summary class="option-group-head">
+            <span class="option-group-title">${escapeHtml(labels[group] || group)}</span>
+            <span class="option-group-meta">
+              <span class="chip">${items.length} total</span>
+              <span class="chip">${activeCount} active</span>
+            </span>
+          </summary>
+          <div class="option-group-body">
+            ${items
+              .map(
+                (item) => `
+                <div class="admin-item">
+                  <div>${group === "roast_level" ? roastThumbHtml(item.value) : ""}<strong>${escapeHtml(item.label)}</strong><span class="chip">${item.is_active ? "active" : "off"}</span></div>
+                  <button data-option-edit="${item.id}">Edit</button>
+                </div>`
+              )
+              .join("")}
+          </div>
+        </details>`;
+    })
     .join("");
   $$("[data-option-edit]").forEach((button) => {
     button.onclick = () => {
@@ -452,33 +477,20 @@ async function saveAxis(event) {
   await refreshAll();
 }
 
-async function loginAdmin() {
-  const password = $("#admin-password").value;
-  const data = await api("/api/admin/login", { method: "POST", body: JSON.stringify({ password }) });
-  state.adminToken = data.token;
-  localStorage.setItem("adminToken", data.token);
-  toast("Unlocked");
-  renderSettings();
-}
-
-async function changePassword(event) {
-  event.preventDefault();
-  const password = new FormData(event.target).get("password");
-  await api("/api/admin/password", { method: "POST", body: JSON.stringify({ password }) });
-  event.target.reset();
-  toast("Password changed");
-}
-
 async function restoreBackup(event) {
   event.preventDefault();
-  if (!state.adminToken) return toast("Unlock settings first");
   if (!confirm("Restore backup and replace current data?")) return;
   const file = $("#restore-file").files[0];
   const fd = new FormData();
   fd.append("backup", file);
   await api("/api/backup/import", { method: "POST", body: fd, headers: {} });
-  toast("Restored");
+  state.mediaVersion = Date.now();
   await refreshAll();
+  state.selectedRecord = null;
+  $("#record-detail").innerHTML = "";
+  clearForm();
+  event.target.reset();
+  toast("Restored");
 }
 
 function setupPhotoDropzone() {
@@ -617,6 +629,11 @@ function temp(value) {
   return value == null ? "-" : `${value}°C`;
 }
 
+function mediaUrl(url) {
+  if (!url) return "";
+  return `${url}${url.includes("?") ? "&" : "?"}v=${state.mediaVersion}`;
+}
+
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
@@ -632,11 +649,9 @@ function bindEvents() {
   ["search", "filter-roaster", "filter-roast-level", "filter-processing", "filter-rating", "filter-temp-band", "sort-records"].forEach((id) => {
     $("#" + id).addEventListener("input", loadRecords);
   });
-  $("#admin-login").onclick = loginAdmin;
   $("#roaster-form").addEventListener("submit", saveRoaster);
   $("#option-form").addEventListener("submit", saveOption);
   $("#axis-form").addEventListener("submit", saveAxis);
-  $("#password-form").addEventListener("submit", changePassword);
   $("#restore-form").addEventListener("submit", restoreBackup);
   $("#close-modal").onclick = () => $("#image-modal").classList.add("hidden");
   setupPhotoDropzone();

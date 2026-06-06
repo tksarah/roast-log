@@ -1,10 +1,22 @@
 {$APP_DOMAIN} {
 	encode zstd gzip
+	@admin {
+		path /admin /admin/* /api/bootstrap /api/records /api/records/* /api/photos/* /api/roasters /api/roasters/* /api/options /api/options/* /api/flavor-axes /api/flavor-axes/* /api/backup/*
+	}
+	basicauth @admin {
+		{$ADMIN_USER} {$ADMIN_PASSWORD_HASH}
+	}
 	reverse_proxy app:3000
 }
 
 localhost, 127.0.0.1 {
 	tls internal
 	encode zstd gzip
+	@admin {
+		path /admin /admin/* /api/bootstrap /api/records /api/records/* /api/photos/* /api/roasters /api/roasters/* /api/options /api/options/* /api/flavor-axes /api/flavor-axes/* /api/backup/*
+	}
+	basicauth @admin {
+		{$ADMIN_USER} {$ADMIN_PASSWORD_HASH}
+	}
 	reverse_proxy app:3000
 }

@@ -7,7 +7,6 @@ services:
       APP_PORT: "3000"
       DB_PATH: /data/roast-log.sqlite3
       UPLOAD_DIR: /uploads
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-roastlog}
     volumes:
       - roast_data:/data
       - roast_uploads:/uploads
@@ -21,6 +20,8 @@ services:
       - app
     environment:
       APP_DOMAIN: ${APP_DOMAIN:-localhost}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH}
     ports:
       - "80:80"
       - "443:443"
