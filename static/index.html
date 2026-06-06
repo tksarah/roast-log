@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Roast Log</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <div>
+          <strong>Roast Log</strong>
+          <small>Private dashboard</small>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-button active" data-view="dashboard">Dashboard</button>
+        <button class="nav-button" data-view="records">Records</button>
+        <button class="nav-button" data-view="editor">New Roast</button>
+        <button class="nav-button" data-view="settings">Settings</button>
+        <button class="nav-button" data-view="backup">Backup</button>
+      </nav>
+    </aside>
+
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title">Dashboard</h1>
+          <p id="page-kicker"></p>
+        </div>
+        <button class="primary" id="new-record">New Roast</button>
+      </header>
+
+      <section id="dashboard" class="view active">
+        <div class="stats-grid">
+          <article class="metric">
+            <span>Total</span>
+            <strong id="stat-count">0</strong>
+          </article>
+          <article class="metric">
+            <span>Avg loss</span>
+            <strong id="stat-loss">-</strong>
+          </article>
+          <article class="metric">
+            <span>Top rating</span>
+            <strong id="stat-rating">-</strong>
+          </article>
+          <article class="metric">
+            <span>Recent</span>
+            <strong id="stat-recent">-</strong>
+          </article>
+        </div>
+        <div class="dashboard-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Flavor</h2>
+            </div>
+            <canvas id="dashboard-radar" width="420" height="300"></canvas>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Recent</h2>
+            </div>
+            <div id="recent-list" class="compact-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="records" class="view">
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Search" />
+          <select id="filter-roaster"></select>
+          <select id="filter-roast-level"></select>
+          <select id="filter-processing"></select>
+          <select id="filter-rating"></select>
+          <select id="filter-temp-band"></select>
+          <select id="sort-records">
+            <option value="date_desc">Date desc</option>
+            <option value="date_asc">Date asc</option>
+            <option value="rating_desc">Rating</option>
+            <option value="l_value_asc">L value</option>
+            <option value="loss_desc">Loss</option>
+            <option value="charge_temp_desc">Charge temp</option>
+            <option value="drop_temp_desc">Drop temp</option>
+          </select>
+        </div>
+        <div class="record-layout">
+          <div id="record-list" class="record-list"></div>
+          <aside id="record-detail" class="detail-panel"></aside>
+        </div>
+      </section>
+
+      <section id="editor" class="view">
+        <form id="record-form" class="editor-grid">
+          <input type="hidden" name="id" />
+          <section class="panel form-section">
+            <div class="panel-head">
+              <h2>Bean</h2>
+            </div>
+            <label>名称<input name="name" list="bean-name-list" /></label>
+            <datalist id="bean-name-list"></datalist>
+            <label class="check-row"><input name="add_name_option" type="checkbox" />マスタ追加</label>
+            <label>日付<input name="date" type="date" /></label>
+            <label>ロースター<select name="roaster_id"></select></label>
+            <label>原産国<input name="country" /></label>
+            <label>地域<input name="region" /></label>
+            <label>農園<input name="farm" /></label>
+            <label>標高<input name="altitude" placeholder="1200m-1500m" /></label>
+            <label>スクリーン<input name="screen" /></label>
+            <label>欠点数<input name="defect_count" type="number" step="1" /></label>
+            <label>規格<input name="grade" /></label>
+            <label>精選処理<select name="processing"></select></label>
+          </section>
+
+          <section class="panel form-section">
+            <div class="panel-head">
+              <h2>Roast</h2>
+            </div>
+            <label>焙煎前 g<input name="green_weight_g" type="number" step="0.1" /></label>
+            <label>焙煎後 g<input name="roasted_weight_g" type="number" step="0.1" /></label>
+            <label>焙煎時間<input name="roast_time" pattern="[0-9]{1,3}:[0-5][0-9]" placeholder="12:30" inputmode="numeric" /></label>
+            <label>クーリング時間<input name="cooling_time" pattern="[0-9]{1,3}:[0-5][0-9]" placeholder="03:00" inputmode="numeric" /></label>
+            <label>L値<input name="l_value" type="number" step="0.1" /></label>
+            <label>温度帯<select name="temperature_band"></select></label>
+            <div class="roast-level-picker" id="roast-level-picker"></div>
+          </section>
+
+          <section class="panel form-section">
+            <div class="panel-head">
+              <h2>Temp</h2>
+            </div>
+            <label>投入温度<input name="charge_temp_c" type="number" step="0.1" /></label>
+            <label>1ハゼ開始温度<input name="first_crack_start_temp_c" type="number" step="0.1" /></label>
+            <label>1ハゼ終了温度<input name="first_crack_end_temp_c" type="number" step="0.1" /></label>
+            <label>2ハゼ開始温度<input name="second_crack_start_temp_c" type="number" step="0.1" /></label>
+            <label>排出温度<input name="drop_temp_c" type="number" step="0.1" /></label>
+          </section>
+
+          <section class="panel form-section">
+            <div class="panel-head">
+              <h2>Taste</h2>
+            </div>
+            <label>味の評価<select name="taste_rating"></select></label>
+            <div id="flavor-inputs" class="flavor-inputs"></div>
+            <canvas id="editor-radar" width="360" height="260"></canvas>
+            <label class="wide">コメント<textarea name="comment" rows="5"></textarea></label>
+            <div class="wide photo-dropzone" id="photo-dropzone" tabindex="0" role="button" aria-label="写真を追加">
+              <input id="record-photos" type="file" accept="image/*" multiple />
+              <div class="drop-copy">
+                <strong>Drop photos</strong>
+                <span>クリックまたはドラッグ&ドロップ</span>
+              </div>
+              <div id="photo-count" class="photo-count">0 files</div>
+              <div id="photo-preview" class="photo-preview"></div>
+            </div>
+          </section>
+
+          <div class="form-actions">
+            <button class="primary" type="submit">Save</button>
+            <button type="button" id="clear-form">Clear</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="settings" class="view">
+        <div id="admin-lock" class="panel lock-panel">
+          <h2>Admin</h2>
+          <input id="admin-password" type="password" placeholder="Password" />
+          <button class="primary" id="admin-login">Unlock</button>
+        </div>
+        <div id="admin-content" class="settings-grid hidden">
+          <section class="panel">
+            <div class="panel-head"><h2>Roasters</h2></div>
+            <form id="roaster-form" class="inline-form">
+              <input name="id" type="hidden" />
+              <input name="name" placeholder="Name" required />
+              <input name="memo" placeholder="Memo" />
+              <input name="sort_order" type="number" placeholder="Order" />
+              <label class="check-row"><input name="is_active" type="checkbox" checked />Active</label>
+              <input id="roaster-photo" type="file" accept="image/*" />
+              <button class="primary">Save</button>
+            </form>
+            <div id="roaster-admin-list" class="admin-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head"><h2>Options</h2></div>
+            <form id="option-form" class="inline-form">
+              <input name="id" type="hidden" />
+              <select name="group_key">
+                <option value="bean_name">名称</option>
+                <option value="processing">精選処理</option>
+                <option value="roast_level">焙煎度</option>
+                <option value="taste_rating">味の評価</option>
+                <option value="temperature_band">温度帯</option>
+              </select>
+              <input name="label" placeholder="Label" required />
+              <input name="description" placeholder="Description" />
+              <input name="category" placeholder="Category" />
+              <input name="sort_order" type="number" placeholder="Order" />
+              <label class="check-row"><input name="is_active" type="checkbox" checked />Active</label>
+              <button class="primary">Save</button>
+            </form>
+            <div id="option-admin-list" class="admin-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head"><h2>Flavor Axes</h2></div>
+            <form id="axis-form" class="inline-form">
+              <input name="id" type="hidden" />
+              <input name="label" placeholder="Label" required />
+              <input name="sort_order" type="number" placeholder="Order" />
+              <label class="check-row"><input name="is_active" type="checkbox" checked />Active</label>
+              <button class="primary">Save</button>
+            </form>
+            <div id="axis-admin-list" class="admin-list"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head"><h2>Password</h2></div>
+            <form id="password-form" class="inline-form">
+              <input name="password" type="password" placeholder="New password" />
+              <button class="primary">Change</button>
+            </form>
+          </section>
+        </div>
+      </section>
+
+      <section id="backup" class="view">
+        <section class="panel backup-panel">
+          <div class="panel-head"><h2>Backup</h2></div>
+          <a class="button primary" href="/api/backup/export">Export ZIP</a>
+          <form id="restore-form" class="inline-form">
+            <input id="restore-file" type="file" accept=".zip" required />
+            <button>Restore</button>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <div id="image-modal" class="modal hidden">
+      <button id="close-modal">×</button>
+      <img src="/assets/roast-level.png" alt="焙煎度" />
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
