@@ -20,17 +20,9 @@
         </a>
         <nav class="lp-nav" aria-label="メインナビゲーション">
           <a class="is-active" href="#top">ホーム</a>
-          <a href="#journal">焙煎記録</a>
           <a href="#favorites">お気に入り</a>
-          <a href="#beans">豆の記録</a>
-          <a href="#tools">道具の記録</a>
-          <a href="#blog">ブログ</a>
         </nav>
         <div class="lp-actions">
-          <a class="utility-link" href="#journal" aria-label="検索">
-            <span aria-hidden="true">⌕</span>
-            検索
-          </a>
           <a class="utility-link" href="/admin/" aria-label="マイページ">
             <span aria-hidden="true">●</span>
             マイページ
@@ -40,20 +32,14 @@
 
       <main>
         <section class="hero" aria-labelledby="hero-title">
-          <div class="hero-copy">
-            <p class="hand-note">Good roast!</p>
-            <h1 id="hero-title">焙煎の一日を、<br />香りごと記録する。</h1>
-            <p class="script">Coffee Roast Diary.</p>
-            <p class="hero-text">
-              生豆から一杯のコーヒーになるまで。その時の気づきや感動を、日記のように残していく場所。
-            </p>
-            <div class="hero-actions">
-              <a class="button-primary" href="/admin/">焙煎記録をつける <span aria-hidden="true">✎</span></a>
+          <div class="hero-art" role="img" aria-label="焙煎豆と道具が並ぶ Coffee Roast Diary のヒーロービジュアル">
+            <div class="hero-copy visually-hidden">
+              <h1 id="hero-title">焙煎の一日を、<br />香りごと記録する。</h1>
+              <p class="hero-text">
+                生豆から一杯のコーヒーになるまで。その時の気づきや感動を、日記のように残していく場所。
+              </p>
             </div>
-            <div class="stamp" aria-hidden="true">ROAST<br />LOG</div>
-          </div>
-          <div class="hero-photo" role="img" aria-label="焙煎豆と道具のイメージ">
-            <div class="photo-glow"></div>
+            <a class="button-primary hero-cta" href="/admin/">焙煎記録をつける <span aria-hidden="true">→</span></a>
           </div>
         </section>
 
@@ -80,28 +66,15 @@
           <div id="favorite-list" class="favorite-list" aria-live="polite"></div>
           <button class="carousel-arrow right" type="button" aria-label="次へ">›</button>
         </section>
-
-        <section class="bottom-story" id="beans" aria-labelledby="story-title">
-          <div class="memo-card" aria-hidden="true">
-            <p>本日の焙煎メモ</p>
-            <dl>
-              <div><dt>豆</dt><dd>グアテマラ アンティグア</dd></div>
-              <div><dt>焙煎度</dt><dd>ハイロースト</dd></div>
-              <div><dt>気温</dt><dd>24°C</dd></div>
-            </dl>
-            <div class="chart-line"></div>
-          </div>
-          <div class="story-copy">
-            <h2 id="story-title">あなたの焙煎の物語を、<br />ここに残していきましょう。</h2>
-            <p>気づきや工夫、失敗もすべてが、次の一杯をもっと美味しくしてくれます。</p>
-            <a class="button-primary wide" href="/admin/">焙煎記録をはじめる <span aria-hidden="true">→</span></a>
-          </div>
-          <div class="coffee-stamp" aria-hidden="true">GOOD COFFEE<br />GOOD DAY</div>
-          <div class="polaroid" id="tools" aria-hidden="true"></div>
-        </section>
-
-        <section class="visually-hidden" id="blog" aria-label="ブログ"></section>
       </main>
+      <footer class="lp-footer">
+        <div>
+          <strong>焙煎日記</strong>
+          <p>気づきも香りも、次の一杯につながる記録に。</p>
+        </div>
+        <a class="footer-link" href="/admin/">マイページ</a>
+        <small>© 2026 Coffee Roast Diary</small>
+      </footer>
     </div>
     <script src="/static/public.js"></script>
   </body>
